@@ -1,0 +1,1 @@
+MAX_JOBS=4 TORCH_CUDA_ARCH_LIST="8.9" python setup.py install
