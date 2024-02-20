@@ -214,7 +214,7 @@ class LinearHijack(nn.Module):
 
     def construct_qweights(self):
         q, state = BF.quantize_fp4(self.lin[0].weight.data)
-        self.quant_data = QuantData(q, state, self.lin[0].weight.shape)
+        self.quant_data = QuantData(q, state, self.lin[0].weight.shape, self.lin[0].bias, self.lin[0])
 
     def forward(self, x):
         return self.quant_data.gemm(x)
