@@ -1,6 +1,6 @@
 # torch_bnb_fp4
 
-torch_bnb_fp4 is a library that provides a Torch C++ extension for bitsandbytes dequantization. It allows for efficient dequantization of FP4 (half-precision floating-point) values.
+torch_bnb_fp4 is a library that provides a Torch C++ extension for bitsandbytes dequantization. It allows for efficient dequantization of FP4 (4 bit floating-point) values.
 
 ## Installation
 
