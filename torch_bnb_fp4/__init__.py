@@ -14,14 +14,6 @@ from torch_bnb_fp4_ext import gemv_4bit_inference_impl  # type: ignore
 from torch_bnb_fp4_ext import qlinear as qlinear_  # type: ignore
 from torch_bnb_fp4_ext import qlinear_bias as qlinear_bias_  # type: ignore
 
-try:
-    from fused_dense_cuda import linear_bias_forward  # type: ignore
-except ImportError:
-    print(
-        f"Couldn't import fused_dense_cuda, if you want to use it, please install the nvidia 'apex' package."
-    )
-    linear_bias_forward = torch.nn.functional.linear
-
 
 class ScalarType(Enum):
     bfloat16 = ScalarType_.bfloat16
@@ -137,7 +129,6 @@ class QuantData:
         self.bias = original_lin.bias if hasattr(original_lin, "bias") else bias
         self.original_lin = original_lin
         self.compute_dtype_set = False
-        self.forward_func = linear_bias_forward if self.bias is not None else F.linear
 
     def set_compute_type(self, x):
         self.o_type = x.dtype
