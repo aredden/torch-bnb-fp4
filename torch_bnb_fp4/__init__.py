@@ -168,7 +168,6 @@ class QuantData:
         )
 
     def qlinear(self, A: torch.Tensor):
-        print(self.M, self.N, self.blocksize)
         if self.bias is None:
             return qlinear_(
                 A,
