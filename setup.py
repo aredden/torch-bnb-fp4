@@ -21,7 +21,7 @@ def append_nvcc_threads(nvcc_extra_args):
 
 setup(
     name="torch_bnb_fp4",
-    version="0.0.2",
+    version="0.0.3",
     packages=find_packages(exclude=['csrc','csrc/*']),
     requires=['bitsandbytes'],
     ext_modules=[
