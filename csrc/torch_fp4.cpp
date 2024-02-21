@@ -6,21 +6,9 @@
 
 void dequantizeBlockwise_impl(torch::Tensor A, torch::Tensor absmax, int M, int N, int blocksize, int n, torch::Tensor out);
 torch::Tensor gemv_4bit_inference(torch::Tensor A, torch::Tensor B, torch::Tensor absmax, torch::Tensor datatype, int blocksize, torch::ScalarType dtype, std::vector<uint32_t> Bshape, bool use_reduced_prec_accumulate);
-torch::Tensor qlinear_impl(
-    // A_in is the input tensor of shape (B, M, K), where B is the batch size, M is the input feature dimension, and K is the output feature dimension
-    // A is the quantized input tensor which gets dequantized to shape (B, N, K)
-    torch::Tensor A_in,
-    torch::Tensor A,
-    torch::Tensor absmax,
-    int N,
-    int K,
-    int blocksize,
-    int n,
-    bool transposed,
-    torch::Tensor bias = {}
-);
 
-#define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), " must be a CUDA tensor")
+
+#define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), " must be contiguous")
 
 enum class ScalarTypeEnum
@@ -52,6 +40,7 @@ torch::Tensor dequantize_fp4(torch::Tensor A, torch::Tensor absmax,
     CHECK_CUDA(absmax);
     CHECK_CONTIGUOUS(A);
     CHECK_CONTIGUOUS(absmax);
+    
     torch::Tensor out = torch::empty({M, N}, torch::TensorOptions().dtype(get_scalar_type(o_type)).device(A.device()));
     dequantizeBlockwise_impl(A, absmax, M, N, blocksize, M * N, out);
     return out;
@@ -65,7 +54,7 @@ torch::Tensor qlinear(torch::Tensor A_in, torch::Tensor A, torch::Tensor absmax,
     CHECK_CONTIGUOUS(absmax);
     torch::Tensor out = torch::empty({M, N}, A_in.options());
     dequantizeBlockwise_impl(A, absmax, M, N, blocksize, M * N, out);
-    return A_in.matmul(out.t());
+    return torch::nn::functional::linear(A_in, out);
 }
 
 torch::Tensor qlinear_bias(torch::Tensor A_in, torch::Tensor A, torch::Tensor absmax, int M, int N, int blocksize, torch::Tensor bias)
@@ -76,7 +65,7 @@ torch::Tensor qlinear_bias(torch::Tensor A_in, torch::Tensor A, torch::Tensor ab
     CHECK_CONTIGUOUS(absmax);
     torch::Tensor out = torch::empty({M, N}, A_in.options());
     dequantizeBlockwise_impl(A, absmax, M, N, blocksize, M * N, out);
-    return A_in.matmul(out.t()).add(bias);
+    return torch::nn::functional::linear(A_in, out, bias);
 }
 
 torch::Tensor gemv_4bit_inference_impl(torch::Tensor A, torch::Tensor B, torch::Tensor absmax, torch::Tensor datatype, int blocksize, ScalarTypeEnum dtype, std::vector<uint32_t> Bshape)

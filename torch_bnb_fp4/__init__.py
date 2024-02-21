@@ -1,4 +1,5 @@
 from enum import Enum
+from functools import partial
 from math import prod
 from typing import List, Union
 
@@ -7,12 +8,14 @@ import torch.nn.functional as F
 from bitsandbytes import functional as BF
 from bitsandbytes.nn.modules import Linear4bit, Params4bit
 from torch import nn
-from torch_bnb_fp4_ext import ScalarType as ScalarType_ # type: ignore
+from torch_bnb_fp4_ext import ScalarType as ScalarType_  # type: ignore
 from torch_bnb_fp4_ext import dequantize_fp4 as dequantize_fp4_  # type: ignore
-from torch_bnb_fp4_ext import gemv_4bit_inference_impl # type: ignore
+from torch_bnb_fp4_ext import gemv_4bit_inference_impl  # type: ignore
+from torch_bnb_fp4_ext import qlinear as qlinear_  # type: ignore
+from torch_bnb_fp4_ext import qlinear_bias as qlinear_bias_  # type: ignore
 
 try:
-    from fused_dense_cuda import linear_bias_forward # type: ignore
+    from fused_dense_cuda import linear_bias_forward  # type: ignore
 except ImportError:
     print(
         f"Couldn't import fused_dense_cuda, if you want to use it, please install the nvidia 'apex' package."
@@ -153,6 +156,39 @@ class QuantData:
             self.qtype,
         )
 
+    def qgemv(self, A: torch.Tensor):
+        return gemm_4bit_inference_qtype(
+            A=A,
+            B=self.A.t(),
+            absmax=self.absmax,
+            code=self.code,
+            blocksize=self.blocksize,
+            dtype=self.qtype,
+            Bshape=self.quant_state.shape,
+        )
+
+    def qlinear(self, A: torch.Tensor):
+        print(self.M, self.N, self.blocksize)
+        if self.bias is None:
+            return qlinear_(
+                A,
+                self.A,
+                self.absmax,
+                self.M,
+                self.N,
+                self.blocksize,
+            )
+        else:
+            return qlinear_bias_(
+                A,
+                self.A,
+                self.absmax,
+                self.M,
+                self.N,
+                self.blocksize,
+                self.bias,
+            )
+
     def gemm(self, A: torch.Tensor):
         prodshape = prod(A.shape)
         is_contig = A.is_contiguous()
@@ -170,7 +206,7 @@ class QuantData:
             self.set_compute_type(A)
         if prodshape == A.shape[-1]:
             if A.shape[-1] % self.blocksize != 0:
-                out = self.forward_func(A, self.dequantize(), self.bias)
+                out = self.qlinear(A)
             else:
                 if not is_contig:
                     A = A.contiguous()
@@ -178,19 +214,22 @@ class QuantData:
                 # with 1 token and batch size 1
                 # aka- (1, 1, hidden_dim)
                 # or (1, hidden_dim)
-                out = gemm_4bit_inference_qtype(
-                    A=A,
-                    B=self.A.t(),
-                    absmax=self.absmax,
-                    code=self.code,
-                    blocksize=self.blocksize,
-                    dtype=self.qtype,
-                    Bshape=self.quant_state.shape,
-                )
-                if self.bias is not None:
-                    out += self.bias
+
+                if A.ndim == 3:
+                    N_batch = A.shape[0]
+                    A = A.view(-1, A.shape[-1])
+                    out = self.qgemv(A)
+                    out = out.view(N_batch, 1, -1)
+                    if self.bias is not None:
+                        out += self.bias
+                elif A.ndim == 2:
+                    out = self.qgemv(A)
+                    if self.bias is not None:
+                        out += self.bias
+                else:
+                    out = self.qlinear(A)
         else:
-            out = self.forward_func(A, self.dequantize(), self.bias)
+            out = self.qlinear(A)
         return out
 
 
@@ -209,12 +248,14 @@ class LinearHijack(nn.Module):
                     bias=lin.bias,
                     original_lin=lin,
                 )
-        elif lin.weight.quant_state is None:
+        elif not hasattr(lin.weight, "quant_state") or lin.weight.quant_state is None:
             self.construct_qweights()
 
     def construct_qweights(self):
         q, state = BF.quantize_fp4(self.lin[0].weight.data)
-        self.quant_data = QuantData(q, state, self.lin[0].weight.shape, self.lin[0].bias, self.lin[0])
+        self.quant_data = QuantData(
+            q, state, self.lin[0].weight.shape, self.lin[0].bias, self.lin[0]
+        )
 
     def forward(self, x):
         return self.quant_data.gemm(x)
