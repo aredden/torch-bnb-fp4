@@ -31,25 +31,24 @@ void CUDA_CHECK_RETURN_(cudaError_t cudaStatus) {
     }
 }
 
-__device__ float dequantize_fp4_tree(unsigned char val, float absmax)
-{
+__device__ float dequantize_fp4_tree(unsigned char val, float absmax) {
     float sign = (val & 0b1000) == 8 ? -1.0f : 1.0f;
-    if ((val & 0b0100) == 4)                        // 0
-        if ((val & 0b0010) == 2)                    // 01
-            if ((val & 0b0001) == 1)                // 111
+    if ((val & 0b0100) == 4) // 0
+        if ((val & 0b0010) == 2) // 01
+            if ((val & 0b0001) == 1) // 111
                 return 0.25000000f * absmax * sign; // 1111
             else
                 return 0.16666667f * absmax * sign; // 1110
-        else if ((val & 0b0001) == 1)               // 110
-            return 0.50000000f * absmax * sign;     // 1101
+        else if ((val & 0b0001) == 1) // 110
+            return 0.50000000f * absmax * sign; // 1101
         else
             return 0.33333333f * absmax * sign; // 1100
-    else if ((val & 0b0010) == 2)               // 10
-        if ((val & 0b0001) == 1)                // 101
+    else if ((val & 0b0010) == 2) // 10
+        if ((val & 0b0001) == 1) // 101
             return 1.00000000f * absmax * sign; // 1011
         else
-            return 0.66666667f * absmax * sign;  // 1010
-    else if ((val & 0b0001) == 1)                // 100
+            return 0.66666667f * absmax * sign; // 1010
+    else if ((val & 0b0001) == 1) // 100
         return 5.208333333e-03f * absmax * sign; // 1001
     else
         return 0.00000000f * absmax * sign; // 1000
@@ -60,7 +59,7 @@ template <> __device__ __forceinline__ nv_bfloat16 convert_to_ty(float val) {
     return __float2bfloat16(val);
 }
 template <> __device__ __forceinline__ nv_half convert_to_ty(float val) {
-    
+
     return __float2half(val);
 }
 template <> __device__ __forceinline__ float convert_to_ty(float val) {
@@ -68,7 +67,8 @@ template <> __device__ __forceinline__ float convert_to_ty(float val) {
 }
 
 template <typename T, int TILE_SIZE, int THREADS, int NUM_PER_TH>
-__global__ void dequantize_blockwise_kernel_cuda(unsigned char *A, float *absmax, T *out, const int blocksize, const int n) {
+__global__ void
+dequantize_blockwise_kernel_cuda(unsigned char *A, float *absmax, T *out, const int blocksize, const int n) {
     const int n_load = (gridDim.x * TILE_SIZE);
     int valid_items_load;
     int valid_items_store;
@@ -117,7 +117,9 @@ void launch_kernel_dequant(torch::Tensor A, torch::Tensor absmax, torch::Tensor 
 }
 
 template <typename T>
-void launch_kernel_dequant_stream(torch::Tensor A, torch::Tensor absmax, torch::Tensor out, int blocksize, int n, cudaStream_t stream) {
+void launch_kernel_dequant_stream(
+    torch::Tensor A, torch::Tensor absmax, torch::Tensor out, int blocksize, int n, cudaStream_t stream
+) {
 
     dequantize_blockwise_kernel_cuda<T, 512, 64, 8><<<(n + 1024 - 1) / 1024, 64, 0, stream>>>(
         (unsigned char *)A.data_ptr(),

@@ -1,10 +1,8 @@
 from enum import Enum
-from functools import partial
 from math import prod
 from typing import List, Union
 
 import torch
-import torch.nn.functional as F
 from bitsandbytes import functional as BF
 from bitsandbytes.nn.modules import Linear4bit, Params4bit
 from torch import nn
