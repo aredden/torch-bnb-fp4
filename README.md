@@ -75,7 +75,7 @@ Once the library is installed, you can use it in your Torch projects by importin
 
 To make sure things are working correctly, you can use the script `sanity_check.py` in the root of this repository, which tests the speed and accuracy of the library. For reference, the output from my gpu is as follows:
 
-```bash
+```
 
 ❯ python sanity_check.py
 
