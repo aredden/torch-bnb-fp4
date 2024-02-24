@@ -1,6 +1,6 @@
 # https://clang.llvm.org/docs/ClangFormatStyleOptions.html
 
-ColumnLimit: 120
+ColumnLimit: 140
 ContinuationIndentWidth: 4
 IndentWidth: 4
 TabWidth: 4
@@ -27,6 +27,10 @@ IncludeBlocks: Merge
 BreakStringLiterals: false
 BreakConstructorInitializers: AfterColon
 IndentPPDirectives: BeforeHash
+BreakTemplateDeclarations: No
+Standard: c++17
+Language: Cpp
+
 IncludeCategories:
   - Regex: '"[[:alnum:]._-]+"'
     Priority: 1
@@ -34,6 +38,6 @@ IncludeCategories:
   - Regex: '^((<|").*/)'
     Priority: 2
     SortPriority: 2
-  - Regex: "<[[:alnum:]._-]+>"
+  - Regex: '<[[:alnum:]._-]+>'
     Priority: 3
     SortPriority: 3

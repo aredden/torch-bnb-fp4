@@ -2,3 +2,5 @@ torch_bnb_fp4.egg-info
 dist
 build
 __pycache__
+.misc
+.vscode
