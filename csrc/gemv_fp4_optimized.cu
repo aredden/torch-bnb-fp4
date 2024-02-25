@@ -30,7 +30,6 @@
 void CUDA_CHECK_RETURN(cudaError_t cudaStatus) {
     if (cudaStatus != cudaSuccess) {
         printf("CUDA Failure: %s\n", cudaGetErrorString(cudaStatus));
-        exit(0); // so many segfaults before being able to print out actual crap because of this stupidity
     }
 }
 
@@ -70,7 +69,7 @@ __global__ void gemv_4bit_inference_kernel(
     T local_absmax = T(0.0f);
 
     if (warp_lane < 16 && warp_idx == 0) quant_map[warp_lane] = T(datatype[warp_lane]);
-    __threadfence_block();
+    __syncthreads();
     // A: [1, K]
     // B: [N, K]
     for (int inner_idx = warp_lane * num_values_4bit; inner_idx < K; inner_idx += 32 * num_values_4bit) {
@@ -169,7 +168,7 @@ __global__ void gemv_4bit_inference_kernel_float(
     T local_absmax = T(0.0f);
 
     if (warp_lane < 16 && warp_idx == 0) quant_map[warp_lane] = T(datatype[warp_lane]);
-    __threadfence_block();
+    __syncthreads();
     // A: [1, K]
     // B: [N, K]
     for (int inner_idx = warp_lane * num_values_4bit; inner_idx < K; inner_idx += 32 * num_values_4bit) {

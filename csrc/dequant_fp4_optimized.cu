@@ -53,10 +53,10 @@ __device__ float dequantize_fp4_tree(unsigned char val, float absmax) {
 
 template <typename T> __device__ __forceinline__ T convert_to_ty(float val);
 template <> __device__ __forceinline__ nv_bfloat16 convert_to_ty(float val) {
-    return __float2bfloat16(val);
+    return __float2bfloat16_rn(val);
 }
 template <> __device__ __forceinline__ nv_half convert_to_ty(float val) {
-    return __float2half(val);
+    return __float2half_rn(val);
 }
 template <> __device__ __forceinline__ float convert_to_ty(float val) {
     return val;
@@ -117,7 +117,7 @@ dequantize_blockwise_codebook_kernel_fp4(unsigned char *A, float *absmax, T *out
     typedef cub::BlockStore<T, THREADS, NUM_PER_TH * 2, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
 
     if (warp_lane < 16 && warp_idx == 0) local_code[warp_lane] = code[warp_lane];
-    __threadfence_block();
+    __syncthreads();
 
     __shared__ typename LoadChar::TempStorage loadchar;
     __shared__ typename StoreT::TempStorage storet;
