@@ -639,6 +639,8 @@ class TorchFP4Linear(nn.Module):
         """
         super().__init__()
         self.lin = [lin]
+        self.in_features = lin.in_features
+        self.out_features = lin.out_features
         self.use_codebook_dequant = use_codebook_dequant
         if isinstance(lin.weight, Params4bit):
             if (
@@ -780,16 +782,16 @@ def recursively_replace_with_fp4_linear(
     for name, child in module.named_children():
         if isinstance(child, (nn.Linear, LinearFP4, Linear4bit)):
             if child.weight.data.dtype == torch.uint8:
-                wrapped = TorchFP4Linear.from_linear(
+                child = TorchFP4Linear.from_linear(
                     linear=child, use_codebook_dequant=use_codebook_dequant
                 ).to(device=device, dtype=as_dtype)
             else:
                 # Must call cuda(device) to initialize the bnb linear's quant state
                 child = swap_linear_with_bnb_linear(child, dtype=as_dtype).cuda(device)
-                wrapped = TorchFP4Linear.from_linear(
+                child = TorchFP4Linear.from_linear(
                     linear=child, use_codebook_dequant=use_codebook_dequant
                 ).to(device=device, dtype=as_dtype)
-            setattr(module, name, wrapped)
+            setattr(module, name, child)
         elif isinstance(child, nn.Module):
             recursively_replace_with_fp4_linear(
                 child,
@@ -799,15 +801,15 @@ def recursively_replace_with_fp4_linear(
                 return_final_module=False,
             )
     if isinstance(module, (nn.Linear, LinearFP4, Linear4bit)):
-        if child.weight.data.dtype == torch.uint8:
+        if module.weight.data.dtype == torch.uint8:
             module = TorchFP4Linear.from_linear(
-                linear=child, use_codebook_dequant=use_codebook_dequant
+                linear=module, use_codebook_dequant=use_codebook_dequant
             ).to(device=device, dtype=as_dtype)
         else:
-            # Must call cuda(device) to initialize the bnb linear's quant state
-            child = swap_linear_with_bnb_linear(child, dtype=as_dtype).cuda(device)
+            # Must call cuda(device) to initialize the bnb linear's quant state            module = swap_linear_with_bnb_linear(module, dtype=as_dtype).cuda(device)
             module = TorchFP4Linear.from_linear(
-                linear=child, use_codebook_dequant=use_codebook_dequant
+                linear=module, use_codebook_dequant=use_codebook_dequant
             ).to(device=device, dtype=as_dtype)
+    torch.cuda.empty_cache()
     if return_final_module:
         return module
