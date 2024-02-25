@@ -161,11 +161,11 @@ Elementwise Diff. Avg Between nn.Linear & Quant GEMM 3dim: 0.051025390625
 
 ```
 
-The library provides a `LinearHijack` class that can be used to replace standard PyTorch nn.Linear layers or bitsandbytes FP4 quantized layers.
+The library provides a `TorchFP4Linear` class that can be used to replace standard PyTorch nn.Linear layers via bitsandbytes FP4 quantized layers.
 
 ```py
 from torch import nn
-from torch_bnb_fp4 import LinearHijack
+from torch_bnb_fp4 import TorchFP4Linear, swap_linear_with_bnb_linear
 
 # Define your original linear layer
 # NOTE: this lib supports float16, bfloat16 and float32 tensors.
@@ -175,8 +175,13 @@ original_linear_layer = nn.Linear(
     bias=True
 ).to(device='cuda', dtype=torch.float16)
 
-# Auto quantize via passing to the constructor of the LinearHijack layer.
-quantized_linear_layer = LinearHijack(
+original_linear_layer = swap_linear_with_bnb_linear(
+    original_linear_layer,
+    dtype=torch.float16
+).cuda() # cuda must be called to quantize the linear weights via bnb.
+
+# wrap the linear layer via passing to the constructor of the TorchFP4Linear layer.
+quantized_linear_layer = TorchFP4Linear(
     original_linear_layer,
     use_codebook_dequant=True # or False for fp4 tree dequant, though doesn't make much difference.
 ).to(device='cuda', dtype=torch.float16)
@@ -189,37 +194,13 @@ output = quantized_linear_layer(input_tensor)
 
 ```
 
-For huggingface models, I recommend loading as bitsandbytes fp4 quantized model, and then recursively replacing the BNB layers with the LinearHijack layers.
+For huggingface models, I recommend loading as bitsandbytes fp4 quantized model, and then recursively replacing the BNB layers with the TorchFP4Linear layers.
 
 ```py
 import torch
-from torch_bnb_fp4 import LinearHijack
+from torch_bnb_fp4 import recursively_replace_with_fp4_linear
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 
-
-def recursively_replace(module, as_dtype=torch.float16, use_codebook_dequant=False):
-    """Function to replace all bnb linear layers with torch-bnb-fp4 linear layers."""
-    for name, child in module.named_children():
-        if isinstance(child, torch.nn.Linear):
-            setattr(
-                module,
-                name,
-                LinearHijack(child, use_codebook_dequant=use_codebook_dequant).to(
-                    device=child.weight.device, dtype=as_dtype
-                ),
-            )
-        elif isinstance(child, torch.nn.Module):
-            recursively_replace(
-                child, as_dtype=as_dtype, use_codebook_dequant=use_codebook_dequant
-            )
-    if isinstance(module, torch.nn.Linear):
-        setattr(
-            module,
-            name,
-            LinearHijack(module, use_codebook_dequant=use_codebook_dequant).to(
-                device=module.weight.device, dtype=as_dtype
-            ),
-        )
 # Change this to your desired dtype
 DTYPE = torch.float16
 
@@ -238,7 +219,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # Replace layers with torch-bnb-fp4 layers in-place
-recursively_replace(
+model = recursively_replace_with_fp4_linear(
     model,
     as_dtype=DTYPE,
     use_codebook_dequant=True # or False for fp4 tree dequant, though doesn't make much difference.

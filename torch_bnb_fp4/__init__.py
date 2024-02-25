@@ -1,10 +1,12 @@
 from enum import Enum
 from math import prod
 from typing import List, Literal, Optional, Tuple, Union
+from loguru import logger
 
 import torch
+import bitsandbytes as bnb
 from bitsandbytes import functional as BF
-from bitsandbytes.nn.modules import Linear4bit, Params4bit
+from bitsandbytes.nn.modules import Linear4bit, Params4bit, LinearFP4
 from torch import nn
 from torch_bnb_fp4_ext import ScalarType as ScalarType_  # type: ignore
 from torch_bnb_fp4_ext import dequantize_fp4 as dequantize_fp4_  # type: ignore
@@ -344,7 +346,7 @@ class QuantData:
         A: torch.ByteTensor,
         state: BF.QuantState,
         shape: Tuple[int, int],
-        original_lin: nn.Linear,
+        original_lin: Union[LinearFP4, Linear4bit],
         bias: Optional[torch.FloatTensor] = None,
         use_codebook_dequant: Optional[bool] = True,
         allow_reduced_precision_linear: Optional[bool] = False,
@@ -354,7 +356,7 @@ class QuantData:
 
         This function is used to initialize the QuantData class.
         It takes the quantized data (A), the quantization state (bitsandbytes.functional.QuantState), the shape of the data (shape),
-        the bias (bias), the original linear layer (original_lin), a flag to use codebook dequantization (use_codebook_dequant),
+        the bias (bias), the original bitsandbytes layer (original_lin), a flag to use codebook dequantization (use_codebook_dequant),
         a flag to allow reduced precision linear (allow_reduced_precision_linear), and the type of reduced precision linear dequantization (reduced_precision_linear_dequant_type).
 
         Parameters:
@@ -615,24 +617,36 @@ class QuantData:
         return out
 
 
-class LinearHijack(nn.Module):
+class TorchFP4Linear(nn.Module):
+    """
+    A wrapper for bitsandbytes.nn.LinearFP4 and bitsandbytes.nn.Linear4bit layers.
+    """
+
     def __init__(
-        self, lin: Union[nn.Linear, Linear4bit], use_codebook_dequant: bool = False
+        self,
+        lin: Union[Linear4bit, LinearFP4],
+        use_codebook_dequant: bool = False,
     ):
         """
-        Initializes the LinearHijack class.
-        This class is used to hijack a torch.nn.Linear or Linear4bit layer and replace it with a torch-bnb-fp4 version.
+        Initializes the TorchFP4Linear class.
+        This class is used to wrap a bitsandbytes.nn.LinearFP4 or bitsandbytes.nn.Linear4bit layer and replace it with a torch-bnb-fp4 version.
         It takes the original linear layer (lin) and a flag for whether to use codebook dequantization (use_codebook_dequant).
-        If the original linear layer's weights are not quantized, it will quantize them using bitsandbytes quantization functions.
-        If the original linear layer's weights are quantized, it will use the existing quantization state.
+
+        Parameters:
+        - lin (Union[LinearFP4, Linear4bit]) `REQUIRED` : The original linear layer to wrap.
+        - use_codebook_dequant (bool) `OPTIONAL` : Whether to use codebook dequantization in the TorchFP4Linear layer.
+            Default is False.
+
         """
         super().__init__()
         self.lin = [lin]
         self.use_codebook_dequant = use_codebook_dequant
         if isinstance(lin.weight, Params4bit):
-            if lin.weight.quant_state is None:
-                self.construct_qweights()
-            else:
+            if (
+                lin.weight.quant_state is not None
+                and lin.weight.device.type == "cuda"
+                and lin.weight.data.dtype == torch.uint8
+            ):
                 self.quant_data = QuantData(
                     lin.weight.data,
                     lin.weight.quant_state,
@@ -641,26 +655,19 @@ class LinearHijack(nn.Module):
                     original_lin=lin,
                     use_codebook_dequant=self.use_codebook_dequant,
                 )
-        elif not hasattr(lin.weight, "quant_state") or lin.weight.quant_state is None:
-            self.construct_qweights()
+            else:
+                raise ValueError(
+                    f"Linear weights are not quantized, and I have no idea what to do with that rn. Weights are {lin.weight.data.dtype}"
+                )
 
-    def construct_qweights(self) -> None:
-        """
-        Constructs the quantized weights and quantization state for the linear layer using bitsandbytes quantization functions.
-        """
-        q, state = BF.quantize_fp4(self.lin[0].weight.data)
-        self.quant_data = QuantData(
-            q,
-            state,
-            self.lin[0].weight.shape,
-            self.lin[0],
-            self.lin[0].bias,
-            use_codebook_dequant=self.use_codebook_dequant,
-        )
+        else:
+            raise ValueError(
+                f"Linear is not a bnb linear and is not quantized, and I have no idea what to do with that rn."
+            )
 
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
         """
-        Calls this LinearHijack's quantized linear layer's forward method.
+        Calls this TorchFP4Linear's quantized linear layer's forward method.
         If the input tensor is not contiguous, it will be made contiguous before the operation.
         If the input tensor shape contains a zero, the output will be a tensor of zeros with the correct (0 element) shape.
         If the input tensor's number of elements is equal to the last dimension of itself, and is divisible by the quantized weight's block size, an optimized GEMV operation will be used.
@@ -679,3 +686,129 @@ class LinearHijack(nn.Module):
             return f"TorchFP4Linear(in_features={self.lin[0].in_features}, out_features={self.lin[0].out_features}, bias={self.lin[0].bias is not None}, dtype={self.quant_data.o_type})"
         else:
             return f"TorchFP4Linear(in_features={self.lin[0].in_features}, out_features={self.lin[0].out_features}, bias={self.lin[0].bias is not None})"
+
+    @classmethod
+    def from_linear(
+        cls,
+        linear: Union[LinearFP4, Linear4bit],
+        use_codebook_dequant: bool = False,
+    ) -> "TorchFP4Linear":
+        """
+        Initializes a TorchFP4Linear layer from a bitsandbytes.nn.LinearFP4, or bitsandbytes.nn.Linear4bit layer.
+        If the input layer must be quantized prior to initialization!
+
+        Parameters:
+        - linear (Union[LinearFP4, Linear4bit]): The linear layer to initialize the TorchFP4Linear layer from.
+        - use_codebook_dequant (bool): Whether to use codebook dequantization in the TorchFP4Linear layer.
+            Default is False.
+
+        Returns:
+        - TorchFP4Linear: The TorchFP4Linear layer initialized from the linear layer.
+        """
+        return cls(
+            linear,
+            use_codebook_dequant=use_codebook_dequant,
+        )
+
+
+def swap_linear_with_bnb_linear(linear: nn.Linear, dtype=torch.float16) -> LinearFP4:
+    """
+    Swaps a torch.nn.Linear layer with a bitsandbytes.nn.LinearFP4 layer.
+
+    Swaps and initializes a `bitsandbytes.nn.LinearFP4` layer with the weights
+    and biases of a `torch.nn.Linear` layer.
+
+    Parameters:
+    - linear (nn.Linear): The linear layer to swap.
+    - dtype (torch.dtype): The data type to use for the weights of the LinearFP4 layer.
+        Default is torch.float16.
+
+    Returns:
+    - LinearFP4: The LinearFP4 layer with the weights and biases of the Linear layer.
+    """
+    bnb_module = bnb.nn.LinearFP4(
+        linear.in_features,
+        linear.out_features,
+        linear.bias is not None,
+        dtype,
+        compress_statistics=False,
+    )
+
+    bnb_module.weight.data = linear.weight.data
+    if linear.bias is not None:
+        bnb_module.bias.data = linear.bias.data
+    bnb_module.requires_grad_(False)
+    return bnb_module
+
+
+def recursively_replace_with_fp4_linear(
+    module: nn.Module,
+    as_dtype=torch.float16,
+    use_codebook_dequant=True,
+    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    return_final_module: bool = True,
+) -> Optional[nn.Module]:
+    """Function to replace all bnb linear layers with torch-bnb-fp4 linear layers.
+
+    Recursively replaces all nn.Linear, LinearFP4, and Linear4bit layers
+    within a given PyTorch module with TorchFP4Linear layers.
+
+    This function traverses the module hierarchy of the given PyTorch module and replaces each
+    nn.Linear, LinearFP4, and Linear4bit layer it finds with an equivalent TorchFP4Linear layer
+    that uses FP4 quantization. This can be useful for reducing the memory footprint of a model
+    or for accelerating inference on hardware that supports FP4 operations.
+
+    Parameters:
+    - module (nn.Module): The root module to traverse and modify.
+    - as_dtype (torch.dtype): The default data type to use for the forward pass of the TorchFP4Linear layers.
+        Default is torch.float16.
+    - use_codebook_dequant (bool): Whether to use codebook dequantization in the TorchFP4Linear layers.
+        Default is True.
+    - device (torch.device): The device to move the TorchFP4Linear layers to. Default is the CUDA
+        device if available, otherwise CPU, though it will error on CPU.
+    - return_final_module (bool): Whether to return the modified module. Default is True.
+
+    Returns:
+    - Optional[nn.Module]: The modified module with TorchFP4Linear layers if return_final_module is True,
+        otherwise None.
+
+    """
+    assert (
+        (device.type == "cuda")
+        if hasattr(device, "type")
+        else (device.split(":")[0] == "cuda")
+    ), "Device type must be cuda!"
+    for name, child in module.named_children():
+        if isinstance(child, (nn.Linear, LinearFP4, Linear4bit)):
+            if child.weight.data.dtype == torch.uint8:
+                wrapped = TorchFP4Linear.from_linear(
+                    linear=child, use_codebook_dequant=use_codebook_dequant
+                ).to(device=device, dtype=as_dtype)
+            else:
+                # Must call cuda(device) to initialize the bnb linear's quant state
+                child = swap_linear_with_bnb_linear(child, dtype=as_dtype).cuda(device)
+                wrapped = TorchFP4Linear.from_linear(
+                    linear=child, use_codebook_dequant=use_codebook_dequant
+                ).to(device=device, dtype=as_dtype)
+            setattr(module, name, wrapped)
+        elif isinstance(child, nn.Module):
+            recursively_replace_with_fp4_linear(
+                child,
+                as_dtype=as_dtype,
+                use_codebook_dequant=use_codebook_dequant,
+                device=device,
+                return_final_module=False,
+            )
+    if isinstance(module, (nn.Linear, LinearFP4, Linear4bit)):
+        if child.weight.data.dtype == torch.uint8:
+            module = TorchFP4Linear.from_linear(
+                linear=child, use_codebook_dequant=use_codebook_dequant
+            ).to(device=device, dtype=as_dtype)
+        else:
+            # Must call cuda(device) to initialize the bnb linear's quant state
+            child = swap_linear_with_bnb_linear(child, dtype=as_dtype).cuda(device)
+            module = TorchFP4Linear.from_linear(
+                linear=child, use_codebook_dequant=use_codebook_dequant
+            ).to(device=device, dtype=as_dtype)
+    if return_final_module:
+        return module

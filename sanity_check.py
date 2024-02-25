@@ -4,7 +4,7 @@ from accelerate.utils.bnb import BnbQuantizationConfig, replace_with_bnb_layers
 from torch import nn
 from torch.utils.benchmark import Timer
 from prettytable import PrettyTable
-from torch_bnb_fp4 import LinearHijack
+from torch_bnb_fp4 import recursively_replace_with_fp4_linear
 
 
 def replace_with_bnb(model, dtype=torch.float16):
@@ -50,31 +50,6 @@ class TestModel(nn.Module):
         return self.out_proj(x)
 
 
-def recursively_replace(module, as_dtype=torch.float16, use_codebook_dequant=False):
-    """Function to replace all bnb linear layers with torch-fp4-bnb linear layers."""
-    for name, child in module.named_children():
-        if isinstance(child, torch.nn.Linear):
-            setattr(
-                module,
-                name,
-                LinearHijack(child, use_codebook_dequant=use_codebook_dequant).to(
-                    device=child.weight.device, dtype=as_dtype
-                ),
-            )
-        elif isinstance(child, torch.nn.Module):
-            recursively_replace(
-                child, as_dtype=as_dtype, use_codebook_dequant=use_codebook_dequant
-            )
-    if isinstance(module, torch.nn.Linear):
-        setattr(
-            module,
-            name,
-            LinearHijack(module, use_codebook_dequant=use_codebook_dequant).to(
-                device=module.weight.device, dtype=as_dtype
-            ),
-        )
-
-
 def time_run(model, inputs, label):
     timer = Timer("model(inputs)", globals=locals(), label=label)
     measure = timer.adaptive_autorange()
@@ -114,7 +89,9 @@ def check_speed(dtype=torch.float16, gemm_type="gemm"):
         result2 = time_run(model, input_gemm, "BNB")
         result_bnb = result1.merge([result2])
 
-        recursively_replace(model, as_dtype=dtype)
+        model = recursively_replace_with_fp4_linear(
+            model, as_dtype=dtype, device=model.in_proj.weight.device
+        )
 
         _ = time_run(model, input_gemm, "ZIPPY")
         result1 = time_run(model, input_gemm, "ZIPPY")
@@ -159,8 +136,8 @@ def check(dtype=torch.float16):
     modelhijack = TinyModel(256, 256).cuda().type(dtype)
     modelhijack.in_proj.weight.data = model.in_proj.weight.data.clone()
     modelhijack.in_proj.bias.data = model.in_proj.bias.data.clone()
-    modelhijack.in_proj = LinearHijack(modelhijack.in_proj, use_codebook_dequant=True)
-    hijack = modelhijack
+
+    hijack = recursively_replace_with_fp4_linear(modelhijack).to("cuda", dtype=dtype)
     input_gemv_3dim = torch.randn(1, 1, 256, generator=generator, device="cuda").type(
         dtype
     )

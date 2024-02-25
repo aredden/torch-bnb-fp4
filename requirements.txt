@@ -1,2 +1,3 @@
 bitsandbytes
 prettytable
+accelerate
