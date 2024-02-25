@@ -779,6 +779,10 @@ def recursively_replace_with_fp4_linear(
         if hasattr(device, "type")
         else (device.split(":")[0] == "cuda")
     ), "Device type must be cuda!"
+
+    # Only need to clean cache when we swap an nn.Linear (not Linear4bit or LinearFP4) layer with a TorchFP4Linear,
+    # otherwise we don't need to clean cache.
+    should_clean_cache = False
     for name, child in module.named_children():
         if isinstance(child, (nn.Linear, LinearFP4, Linear4bit)):
             if child.weight.data.dtype == torch.uint8:
@@ -791,6 +795,7 @@ def recursively_replace_with_fp4_linear(
                 child = TorchFP4Linear.from_linear(
                     linear=child, use_codebook_dequant=use_codebook_dequant
                 ).to(device=device, dtype=as_dtype)
+                should_clean_cache = True
             setattr(module, name, child)
         elif isinstance(child, nn.Module):
             recursively_replace_with_fp4_linear(
@@ -806,10 +811,13 @@ def recursively_replace_with_fp4_linear(
                 linear=module, use_codebook_dequant=use_codebook_dequant
             ).to(device=device, dtype=as_dtype)
         else:
-            # Must call cuda(device) to initialize the bnb linear's quant state            module = swap_linear_with_bnb_linear(module, dtype=as_dtype).cuda(device)
+            # Must call cuda(device) to initialize the bnb linear's quant state
+            module = swap_linear_with_bnb_linear(module, dtype=as_dtype).cuda(device)
             module = TorchFP4Linear.from_linear(
                 linear=module, use_codebook_dequant=use_codebook_dequant
             ).to(device=device, dtype=as_dtype)
-    torch.cuda.empty_cache()
+            should_clean_cache = True
+    if should_clean_cache:
+        torch.cuda.empty_cache()
     if return_final_module:
         return module
