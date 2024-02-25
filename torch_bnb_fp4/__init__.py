@@ -1,7 +1,6 @@
 from enum import Enum
 from math import prod
-from typing import List, Literal, Optional, Tuple, Union
-from loguru import logger
+from typing import List, Optional, Tuple, Union
 
 import torch
 import bitsandbytes as bnb
