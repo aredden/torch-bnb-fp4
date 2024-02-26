@@ -215,18 +215,27 @@ model = AutoModelForCausalLM.from_pretrained(
         bnb_4bit_compute_dtype=DTYPE,
         # Must use "fp4" for this library
         bnb_4bit_quant_type="fp4",
+        # double quant is also unsupported, set this to false
+        bnb_4bit_use_double_quant=False,
     )
 )
 
 # Replace layers with torch-bnb-fp4 layers in-place
-model = recursively_replace_with_fp4_linear(
+recursively_replace_with_fp4_linear(
     model,
     as_dtype=DTYPE,
-    use_codebook_dequant=True # or False for fp4 tree dequant, though doesn't make much difference.
+    # or False for fp4 tree dequant, though doesn't make much difference.
+    use_codebook_dequant=True,
+    # Flag to only replace the layers which are bnb layers
+    only_replace_bnb_layers=True,
+    # Optional list of model keys to ignore.
+    # This is useful in the case where your model is not a huggingface model / you want
+    # to ignore swapping of certain layers or modules.
+    ignore_layer_names=["lm_head"]
 )
 
-# Now your model is torch-bnb-fp4'd
 
+# Now your model is torch-bnb-fp4'd
 
 
 ```

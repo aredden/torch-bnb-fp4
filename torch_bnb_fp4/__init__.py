@@ -625,6 +625,7 @@ class TorchFP4Linear(nn.Module):
         self,
         lin: Union[Linear4bit, LinearFP4],
         use_codebook_dequant: bool = False,
+        name="",
     ):
         """
         Initializes the TorchFP4Linear class.
@@ -642,6 +643,7 @@ class TorchFP4Linear(nn.Module):
         self.in_features = lin.in_features
         self.out_features = lin.out_features
         self.use_codebook_dequant = use_codebook_dequant
+        self.name = name
         if isinstance(lin.weight, Params4bit):
             if (
                 lin.weight.quant_state is not None
@@ -693,6 +695,7 @@ class TorchFP4Linear(nn.Module):
         cls,
         linear: Union[LinearFP4, Linear4bit],
         use_codebook_dequant: bool = False,
+        name="",
     ) -> "TorchFP4Linear":
         """
         Initializes a TorchFP4Linear layer from a bitsandbytes.nn.LinearFP4, or bitsandbytes.nn.Linear4bit layer.
@@ -706,13 +709,13 @@ class TorchFP4Linear(nn.Module):
         Returns:
         - TorchFP4Linear: The TorchFP4Linear layer initialized from the linear layer.
         """
-        return cls(
-            linear,
-            use_codebook_dequant=use_codebook_dequant,
-        )
+        return cls(linear, use_codebook_dequant=use_codebook_dequant, name=name)
 
 
-def swap_linear_with_bnb_linear(linear: nn.Linear, dtype=torch.float16) -> LinearFP4:
+def swap_linear_with_bnb_linear(
+    linear: nn.Linear,
+    dtype=torch.float16,
+) -> LinearFP4:
     """
     Swaps a torch.nn.Linear layer with a bitsandbytes.nn.LinearFP4 layer.
 
@@ -728,11 +731,10 @@ def swap_linear_with_bnb_linear(linear: nn.Linear, dtype=torch.float16) -> Linea
     - LinearFP4: The LinearFP4 layer with the weights and biases of the Linear layer.
     """
     bnb_module = bnb.nn.LinearFP4(
-        linear.in_features,
-        linear.out_features,
-        linear.bias is not None,
-        dtype,
-        compress_statistics=False,
+        input_features=linear.in_features,
+        output_features=linear.out_features,
+        bias=linear.bias is not None,
+        compute_dtype=dtype,
     )
 
     bnb_module.weight.data = linear.weight.data
@@ -742,12 +744,25 @@ def swap_linear_with_bnb_linear(linear: nn.Linear, dtype=torch.float16) -> Linea
     return bnb_module
 
 
+def check_if_name_contained_in_list(name, names_list):
+    is_contained = False
+    for name_i in names_list:
+        if name_i in name:
+            is_contained = True
+            break
+    return is_contained
+
+
 def recursively_replace_with_fp4_linear(
     module: nn.Module,
     as_dtype=torch.float16,
     use_codebook_dequant=True,
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     return_final_module: bool = True,
+    only_replace_bnb_layers: bool = False,
+    ignore_layer_names: List[str] = ["lm_head"],
+    parent="",
+    debug: bool = False,
 ) -> Optional[nn.Module]:
     """Function to replace all bnb linear layers with torch-bnb-fp4 linear layers.
 
@@ -768,11 +783,11 @@ def recursively_replace_with_fp4_linear(
     - device (torch.device): The device to move the TorchFP4Linear layers to. Default is the CUDA
         device if available, otherwise CPU, though it will error on CPU.
     - return_final_module (bool): Whether to return the modified module. Default is True.
-
-    Returns:
-    - Optional[nn.Module]: The modified module with TorchFP4Linear layers if return_final_module is True,
-        otherwise None.
-
+    - only_replace_bnb_layers (bool): Whether to only replace bnb layers with TorchFP4Linear layers. Default is False.
+    - ignore_layer_names: (List[str]): List of keys to ignore when replacing layers. Default is ["lm_head"],
+        which is the default for transformers when swapping layers with LLMs. You can also pass in a list of
+        strings to ignore, such as ["lm_head", "pooler", "classifier", "model.final_mlp.to_out"], etc.
+    - debug (bool): Print debugging output. Default is False.
     """
     assert (
         (device.type == "cuda")
@@ -780,23 +795,52 @@ def recursively_replace_with_fp4_linear(
         else (device.split(":")[0] == "cuda")
     ), "Device type must be cuda!"
 
+    if parent != "":
+        parent = parent + "."
+
     # Only need to clean cache when we swap an nn.Linear (not Linear4bit or LinearFP4) layer with a TorchFP4Linear,
     # otherwise we don't need to clean cache.
     should_clean_cache = False
     for name, child in module.named_children():
+        child_name = parent + name
+        if check_if_name_contained_in_list(
+            name, ignore_layer_names
+        ) or check_if_name_contained_in_list(name, ignore_layer_names):
+            if debug:
+                print(f"Ignoring name: {child_name}, as it is in the ignore list")
+            continue
         if isinstance(child, (nn.Linear, LinearFP4, Linear4bit)):
-            if child.weight.data.dtype == torch.uint8:
-                child = TorchFP4Linear.from_linear(
-                    linear=child, use_codebook_dequant=use_codebook_dequant
-                ).to(device=device, dtype=as_dtype)
-            else:
-                # Must call cuda(device) to initialize the bnb linear's quant state
-                child = swap_linear_with_bnb_linear(child, dtype=as_dtype).cuda(device)
-                child = TorchFP4Linear.from_linear(
-                    linear=child, use_codebook_dequant=use_codebook_dequant
-                ).to(device=device, dtype=as_dtype)
-                should_clean_cache = True
-            setattr(module, name, child)
+            if isinstance(child, (LinearFP4, Linear4bit)):
+                if debug:
+                    print(
+                        f"Replacing BNB layer {child_name} swapping with TorchFP4Linear."
+                    )
+                module._modules[name] = module._modules[name].to(device=device)
+                module._modules[name] = TorchFP4Linear(
+                    lin=module._modules[name],
+                    use_codebook_dequant=use_codebook_dequant,
+                    name=child_name,
+                )
+            elif isinstance(child, nn.Linear):
+                if only_replace_bnb_layers:
+                    if debug:
+                        print(f"Ignoring {child_name}, as only_replace_bnb_layers=True")
+                else:
+                    if debug:
+                        print(
+                            f"Replacing {child_name} with BNB linear, and then swapping with TorchFP4Linear."
+                        )
+                    # Must call cuda(device) to initialize the bnb linear's quant state
+                    module._modules[name] = swap_linear_with_bnb_linear(
+                        module._modules[name], dtype=as_dtype
+                    ).to(device)
+                    module._modules[name] = TorchFP4Linear(
+                        lin=module._modules[name],
+                        use_codebook_dequant=use_codebook_dequant,
+                        name=child_name,
+                    )
+                    should_clean_cache = True
+
         elif isinstance(child, nn.Module):
             recursively_replace_with_fp4_linear(
                 child,
@@ -804,19 +848,36 @@ def recursively_replace_with_fp4_linear(
                 use_codebook_dequant=use_codebook_dequant,
                 device=device,
                 return_final_module=False,
+                only_replace_bnb_layers=only_replace_bnb_layers,
+                ignore_layer_names=ignore_layer_names,
+                parent=child_name,
+                debug=debug,
             )
     if isinstance(module, (nn.Linear, LinearFP4, Linear4bit)):
-        if module.weight.data.dtype == torch.uint8:
+        if isinstance(child, (LinearFP4, Linear4bit)):
+            if debug:
+                print(f"Replacing {name} with TorchFP4Linear.")
             module = TorchFP4Linear.from_linear(
-                linear=module, use_codebook_dequant=use_codebook_dequant
-            ).to(device=device, dtype=as_dtype)
-        else:
-            # Must call cuda(device) to initialize the bnb linear's quant state
-            module = swap_linear_with_bnb_linear(module, dtype=as_dtype).cuda(device)
-            module = TorchFP4Linear.from_linear(
-                linear=module, use_codebook_dequant=use_codebook_dequant
-            ).to(device=device, dtype=as_dtype)
-            should_clean_cache = True
+                linear=module, use_codebook_dequant=use_codebook_dequant, name=name
+            ).to(device=device)
+        elif isinstance(module, nn.Linear):
+            if only_replace_bnb_layers:
+                if debug:
+                    print(f"Ignoring {name}, as only_replace_bnb_layers=True")
+            else:
+                # Must call cuda(device) to initialize the bnb linear's quant state
+                if debug:
+                    print(
+                        f"Replacing {name} with bnb linear, and then swapping with TorchFP4Linear."
+                    )
+                module = TorchFP4Linear.from_linear(
+                    linear=swap_linear_with_bnb_linear(module, dtype=as_dtype).to(
+                        device=device
+                    ),
+                    use_codebook_dequant=use_codebook_dequant,
+                    name=name,
+                )
+                should_clean_cache = True
     if should_clean_cache:
         torch.cuda.empty_cache()
     if return_final_module:
