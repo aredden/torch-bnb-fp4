@@ -712,6 +712,7 @@ class TorchFP4Linear(nn.Module):
         return cls(linear, use_codebook_dequant=use_codebook_dequant, name=name)
 
 
+@torch.no_grad
 def swap_linear_with_bnb_linear(
     linear: nn.Linear,
     dtype=torch.float16,
@@ -737,9 +738,9 @@ def swap_linear_with_bnb_linear(
         compute_dtype=dtype,
     )
 
-    bnb_module.weight.data = linear.weight.data
+    bnb_module.weight.data = linear.weight.data.clone().detach()
     if linear.bias is not None:
-        bnb_module.bias.data = linear.bias.data
+        bnb_module.bias.data = linear.bias.data.clone().detach()
     bnb_module.requires_grad_(False)
     return bnb_module
 
@@ -751,6 +752,28 @@ def check_if_name_contained_in_list(name, names_list):
             is_contained = True
             break
     return is_contained
+
+
+def todevice_if_necessary(module, device):
+    if module.weight.data.dtype != torch.uint8 and isinstance(
+        module, (Linear4bit, LinearFP4)
+    ):
+        module.weight = module.weight.to(device)
+        try:
+            assert (
+                module.weight.data.device == device
+                and module.weight.data.dtype == torch.uint8
+            ), f"AAAAAAAAAAAAAHHH {module.weight.data.device} {module.weight.data.dtype} {device}"
+        except Exception as e:
+            print(
+                "bnb/accelerate done messed up, idk how they did it, but they did it. "
+                + "They literally forgot to quantize a layer despite not having any restrictions on which layers to quantize. "
+                + "How?"
+            )
+            qweight, qstate = BF.quantize_fp4(module.weight.data)
+            module.weight.data = qweight
+            module.weight.quant_state = qstate
+    return module
 
 
 def recursively_replace_with_fp4_linear(
@@ -834,6 +857,16 @@ def recursively_replace_with_fp4_linear(
                     module._modules[name] = swap_linear_with_bnb_linear(
                         module._modules[name], dtype=as_dtype
                     ).to(device)
+                    if (
+                        not hasattr(module._modules[name].weight, "quant_state")
+                        or module._modules[name].weight.quant_state is None
+                    ):
+                        module._modules[name] = module._modules[name].to(device)
+                        if module._modules[name].weight.quant_state is None:
+                            module._modules[name] = todevice_if_necessary(
+                                module._modules[name], device
+                            )
+
                     module._modules[name] = TorchFP4Linear(
                         lin=module._modules[name],
                         use_codebook_dequant=use_codebook_dequant,
@@ -854,28 +887,31 @@ def recursively_replace_with_fp4_linear(
                 debug=debug,
             )
     if isinstance(module, (nn.Linear, LinearFP4, Linear4bit)):
-        if isinstance(child, (LinearFP4, Linear4bit)):
+        if isinstance(module, (LinearFP4, Linear4bit)):
             if debug:
-                print(f"Replacing {name} with TorchFP4Linear.")
+                print(f"Replacing {parent} with TorchFP4Linear.")
             module = TorchFP4Linear.from_linear(
                 linear=module, use_codebook_dequant=use_codebook_dequant, name=name
             ).to(device=device)
         elif isinstance(module, nn.Linear):
             if only_replace_bnb_layers:
                 if debug:
-                    print(f"Ignoring {name}, as only_replace_bnb_layers=True")
+                    print(f"Ignoring {parent}, as only_replace_bnb_layers=True")
             else:
                 # Must call cuda(device) to initialize the bnb linear's quant state
                 if debug:
                     print(
-                        f"Replacing {name} with bnb linear, and then swapping with TorchFP4Linear."
+                        f"Replacing {parent} with bnb linear, and then swapping with TorchFP4Linear."
                     )
                 module = TorchFP4Linear.from_linear(
-                    linear=swap_linear_with_bnb_linear(module, dtype=as_dtype).to(
-                        device=device
+                    linear=todevice_if_necessary(
+                        swap_linear_with_bnb_linear(module, dtype=as_dtype).to(
+                            device=device
+                        ),
+                        device,
                     ),
                     use_codebook_dequant=use_codebook_dequant,
-                    name=name,
+                    name=parent,
                 )
                 should_clean_cache = True
     if should_clean_cache:
