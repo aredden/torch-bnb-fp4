@@ -99,7 +99,7 @@ with torch.inference_mode():
 recursively_replace_with_fp4_linear(
     model,
     as_dtype=DTYPE,
-    use_codebook_dequant=True,  # or False for fp4 tree dequant, though doesn't make much difference.
+    use_codebook_dequant=True,  # or False for fp4 tree dequant, though is much slower.
     only_replace_bnb_layers=True,
 )
 

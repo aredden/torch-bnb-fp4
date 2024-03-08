@@ -1,4 +1,5 @@
 from enum import Enum
+import logging
 from math import prod
 from typing import List, Optional, Tuple, Union
 
@@ -624,7 +625,7 @@ class TorchFP4Linear(nn.Module):
     def __init__(
         self,
         lin: Union[Linear4bit, LinearFP4],
-        use_codebook_dequant: bool = False,
+        use_codebook_dequant: bool = True,
         name="",
     ):
         """
@@ -765,7 +766,7 @@ def todevice_if_necessary(module, device):
                 and module.weight.data.dtype == torch.uint8
             ), f"AAAAAAAAAAAAAHHH {module.weight.data.device} {module.weight.data.dtype} {device}"
         except Exception as e:
-            print(
+            logging.debug(
                 "bnb/accelerate done messed up, idk how they did it, but they did it. "
                 + "They literally forgot to quantize a layer despite not having any restrictions on which layers to quantize. "
                 + "How?"

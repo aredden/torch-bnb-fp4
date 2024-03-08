@@ -40,7 +40,8 @@ flags = [
     "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
     "--expt-relaxed-constexpr",
     "--expt-extended-lambda",
-    # "--use_fast_math",
+    "--use_fast_math",
+    "--resource-usage",
 ]
 
 
@@ -72,7 +73,7 @@ setup(
                 "csrc/torch_fp4.cpp",
             ],
             extra_compile_args={
-                "cxx": ["-g", "-O3", "-std=c++17"],
+                "cxx": ["-O3", "-std=c++17"],
                 "nvcc": flags,
             },
         )

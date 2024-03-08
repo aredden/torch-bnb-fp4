@@ -21,6 +21,30 @@
 using namespace cooperative_groups;
 namespace cg = cooperative_groups;
 
+typedef struct {
+    float param[16];
+} param_large_t;
+
+static const param_large_t CODE_PARAM = {
+    .param =
+        {0.00000f,
+         5.208333e-03f,
+         0.6666667f,
+         1.000000f,
+         0.333333f,
+         0.500000f,
+         0.1666667f,
+         0.250000f,
+         -0.000000f,
+         -5.208333e-03f,
+         -0.6666667f,
+         -1.000000f,
+         -0.333333f,
+         -0.500000f,
+         -0.1666667f,
+         -0.250000f}
+};
+
 void CUDA_CHECK_RETURN_(cudaError_t cudaStatus) {
     if (cudaStatus != cudaSuccess) {
         printf("CUDA Failure: %s\n", cudaGetErrorString(cudaStatus));
@@ -99,10 +123,9 @@ __global__ void dequantize_blockwise_kernel_fp4(unsigned char *A, float *absmax,
 }
 
 template <typename T, int TILE_SIZE, int THREADS, int NUM_PER_TH>
-__global__ void
-dequantize_blockwise_codebook_kernel_fp4(unsigned char *A, float *absmax, T *out, float *code, const int blocksize, const int n) {
-    const int warp_idx = threadIdx.x / 32;
-    const int warp_lane = threadIdx.x % 32;
+__global__ void dequantize_blockwise_codebook_kernel_fp4(
+    const unsigned char *A, const float *absmax, T *out, const param_large_t code, const int blocksize, const int n
+) {
 
     const int n_load = (gridDim.x * TILE_SIZE);
     int valid_items_load = 0;
@@ -110,15 +133,24 @@ dequantize_blockwise_codebook_kernel_fp4(unsigned char *A, float *absmax, T *out
     const int base_idx = (blockIdx.x * TILE_SIZE);
     T vals[NUM_PER_TH * 2];
     unsigned char qvals[NUM_PER_TH];
-    float local_abs_max = -FLT_MAX;
-    __shared__ float local_code[16];
+    float local_abs_max;
 
+    auto block = cg::this_thread_block();
+    const int warp_idx = threadIdx.x / 32;
+    const int warp_lane = threadIdx.x % 32;
+    __shared__ float local_code[16];
+    auto convert_ty = convert_to_ty<T>;
+
+    valid_items_load = 0;
+    valid_items_store = 0;
+    local_abs_max = -FLT_MAX;
     typedef cub::BlockLoad<unsigned char, THREADS, NUM_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
     typedef cub::BlockStore<T, THREADS, NUM_PER_TH * 2, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
 
-    if (warp_lane < 16 && warp_idx == 0) local_code[warp_lane] = code[warp_lane];
+    if (block.thread_rank() < 16) {
+        local_code[block.thread_rank()] = code.param[block.thread_rank()];
+    }
     __syncthreads();
-
     __shared__ typename LoadChar::TempStorage loadchar;
     __shared__ typename StoreT::TempStorage storet;
     for (unsigned int i = base_idx; i < n_load; i += gridDim.x * TILE_SIZE) {
@@ -130,9 +162,8 @@ dequantize_blockwise_codebook_kernel_fp4(unsigned char *A, float *absmax, T *out
         LoadChar(loadchar).Load(&(A[i]), qvals, valid_items_load, 128);
 #pragma unroll NUM_PER_TH
         for (int j = 0; j < NUM_PER_TH; j++) {
-
-            vals[j * 2] = T(code[qvals[j] >> 4] * local_abs_max);
-            vals[j * 2 + 1] = T(code[qvals[j] & 0x0F] * local_abs_max);
+            vals[j * 2] = convert_ty(local_code[int(qvals[j] >> 4)] * local_abs_max);
+            vals[j * 2 + 1] = convert_ty(local_code[int(qvals[j] & 0x0F)] * local_abs_max);
         }
         __syncthreads();
         StoreT(storet).Store(&(out[i * 2]), vals, valid_items_store);
@@ -180,7 +211,6 @@ torch::Tensor dequantize_blockwise_codebook_fp4(
     TORCH_CHECK(absmax.dtype() == torch::kFloat32, "absmax must be float32");
     TORCH_CHECK(A.is_cuda(), "A must be cuda");
     TORCH_CHECK(absmax.is_cuda(), "absmax must be cuda");
-    TORCH_CHECK_TYPE(codebook.dtype() == torch::kFloat32, "codebook must be float32");
     torch::Tensor out = torch::empty({M, N}, torch::dtype(dtype).device(A.device()));
     const int blocks = CDIV(n, 1024);
     switch (dtype) {
@@ -189,7 +219,7 @@ torch::Tensor dequantize_blockwise_codebook_fp4(
                 (unsigned char *)A.data_ptr(),
                 (float *)absmax.data_ptr(),
                 (float *)out.mutable_data_ptr(),
-                (float *)codebook.data_ptr(),
+                CODE_PARAM,
                 (const int)(blocksize / 2),
                 (const int)n
             );
@@ -200,7 +230,7 @@ torch::Tensor dequantize_blockwise_codebook_fp4(
                 (unsigned char *)A.data_ptr(),
                 (float *)absmax.data_ptr(),
                 (nv_half *)out.mutable_data_ptr(),
-                (float *)codebook.data_ptr(),
+                CODE_PARAM,
                 (const int)(blocksize / 2),
                 (const int)n
             );
@@ -211,7 +241,7 @@ torch::Tensor dequantize_blockwise_codebook_fp4(
                 (unsigned char *)A.data_ptr(),
                 (float *)absmax.data_ptr(),
                 (nv_bfloat16 *)out.mutable_data_ptr(),
-                (float *)codebook.data_ptr(),
+                CODE_PARAM,
                 (const int)(blocksize / 2),
                 (const int)n
             );

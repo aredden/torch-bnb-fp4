@@ -25,6 +25,30 @@
 #define num_values_4bit 32
 #define num_values_4bit 32
 
+typedef struct {
+    float param[16];
+} param_large_t;
+
+static const param_large_t CODE_PARAM = {
+    .param =
+        {0.00000f,
+         5.208333e-03f,
+         0.6666667f,
+         1.000000f,
+         0.333333f,
+         0.500000f,
+         0.1666667f,
+         0.250000f,
+         -0.000000f,
+         -5.208333e-03f,
+         -0.6666667f,
+         -1.000000f,
+         -0.333333f,
+         -0.500000f,
+         -0.1666667f,
+         -0.250000f}
+};
+
 #define CDIV(x, y) (((x) + (y)-1) / (y))
 
 void CUDA_CHECK_RETURN(cudaError_t cudaStatus) {
@@ -41,7 +65,7 @@ __global__ void gemv_4bit_inference_kernel(
     T *__restrict__ const A,
     unsigned char *B,
     T_REDUCE *absmax,
-    const T_REDUCE *datatype,
+    const param_large_t datatype,
     T *out,
     int lda,
     int ldb,
@@ -68,7 +92,7 @@ __global__ void gemv_4bit_inference_kernel(
     __shared__ T quant_map[16];
     T local_absmax = T(0.0f);
 
-    if (warp_lane < 16 && warp_idx == 0) quant_map[warp_lane] = T(datatype[warp_lane]);
+    if (warp_lane < 16 && warp_idx == 0) quant_map[warp_lane] = T(datatype.param[warp_lane]);
     __syncthreads();
     // A: [1, K]
     // B: [N, K]
@@ -140,7 +164,7 @@ __global__ void gemv_4bit_inference_kernel_float(
     T *__restrict__ const A,
     unsigned char *B,
     T_REDUCE *absmax,
-    const T_REDUCE *datatype,
+    const param_large_t datatype,
     T *out,
     int lda,
     int ldb,
@@ -167,7 +191,7 @@ __global__ void gemv_4bit_inference_kernel_float(
     __shared__ T quant_map[16];
     T local_absmax = T(0.0f);
 
-    if (warp_lane < 16 && warp_idx == 0) quant_map[warp_lane] = T(datatype[warp_lane]);
+    if (warp_lane < 16 && warp_idx == 0) quant_map[warp_lane] = T(datatype.param[warp_lane]);
     __syncthreads();
     // A: [1, K]
     // B: [N, K]
@@ -239,7 +263,7 @@ void gemv_4bit_inference_launch(
     int m, int n, int k, T *A, unsigned char *B, T_REDUCE *absmax, T_REDUCE *datatype, T *out, int lda, int ldb, int ldc, int blocksize
 ) {
     int num_blocks = CDIV(m, 4);
-    gemv_4bit_inference_kernel<T, 128, T_REDUCE><<<num_blocks, 128>>>(m, n, k, A, B, absmax, datatype, out, lda, ldb, ldc, blocksize);
+    gemv_4bit_inference_kernel<T, 128, T_REDUCE><<<num_blocks, 128>>>(m, n, k, A, B, absmax, CODE_PARAM, out, lda, ldb, ldc, blocksize);
 }
 
 void gemv_4bit_inference_launch_float(
@@ -247,7 +271,7 @@ void gemv_4bit_inference_launch_float(
 ) {
     int num_blocks = CDIV(m, 4);
     gemv_4bit_inference_kernel_float<float, 128, float>
-        <<<num_blocks, 128>>>(m, n, k, A, B, absmax, datatype, out, lda, ldb, ldc, blocksize);
+        <<<num_blocks, 128>>>(m, n, k, A, B, absmax, CODE_PARAM, out, lda, ldb, ldc, blocksize);
 }
 
 torch::Tensor gemv_4bit_inference(
