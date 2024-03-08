@@ -54,7 +54,7 @@ check_device_capability_minimum_allowed()
 
 setup(
     name="torch_bnb_fp4",
-    version="0.0.6",
+    version="0.0.7",
     packages=find_packages(
         exclude=[
             "csrc",
