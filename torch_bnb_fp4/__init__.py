@@ -1,7 +1,7 @@
 from enum import Enum
 import logging
 from math import prod
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, TypeVar
 
 import torch
 import bitsandbytes as bnb
@@ -17,6 +17,7 @@ from torch_bnb_fp4_ext import dequantize_fp4_codebook as dequantize_fp4_codebook
 from torch_bnb_fp4_ext import qlinear_codebook as qlinear_codebook_  # type: ignore
 from torch_bnb_fp4_ext import qlinear_codebook_bias as qlinear_codebook_bias_  # type: ignore
 
+T_Model = TypeVar("T_Model", bound=nn.Module)
 
 class ScalarType(Enum):
     """
@@ -778,7 +779,7 @@ def todevice_if_necessary(module, device):
 
 
 def recursively_replace_with_fp4_linear(
-    module: nn.Module,
+    module: T_Model,
     as_dtype=torch.float16,
     use_codebook_dequant=True,
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
@@ -787,7 +788,7 @@ def recursively_replace_with_fp4_linear(
     ignore_layer_names: List[str] = ["lm_head"],
     parent="",
     debug: bool = False,
-) -> Optional[nn.Module]:
+) -> Optional[T_Model]:
     """Function to replace all bnb linear layers with torch-bnb-fp4 linear layers.
 
     Recursively replaces all nn.Linear, LinearFP4, and Linear4bit layers

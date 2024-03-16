@@ -23,6 +23,11 @@ Libraries:
 - Pytorch
 - [bitsandbytes](https://github.com/TimDettmers/bitsandbytes)
 
+### UPDATE 3.16.2024
+
+Noticed that with bitsandbytes 0.43.x precision dramatically drops, have to update requirements to ensure `bitsandbytes<0.43`
+
+
 ## Installation
 
 To install torch_bnb_fp4, follow these steps:
@@ -238,7 +243,9 @@ recursively_replace_with_fp4_linear(
 # Now your model is torch-bnb-fp4'd
 
 
+
 ```
+
 
 ## Acknowledgements
 

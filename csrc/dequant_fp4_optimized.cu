@@ -124,7 +124,7 @@ __global__ void dequantize_blockwise_kernel_fp4(unsigned char *A, float *absmax,
 
 template <typename T, int TILE_SIZE, int THREADS, int NUM_PER_TH>
 __global__ void dequantize_blockwise_codebook_kernel_fp4(
-    const unsigned char *A, const float *absmax, T *out, const param_large_t code, const int blocksize, const int n
+    const unsigned char *A, const float *absmax, T *out, __grid_constant__ const param_large_t code, const int blocksize, const int n
 ) {
 
     const int n_load = (gridDim.x * TILE_SIZE);

@@ -23,7 +23,7 @@ def check_device_capability_minimum_allowed():
                 )
         if os.getenv("TORCH_CUDA_ARCH_LIST", "") != "":
             archs = _get_cuda_arch_flags()
-            archs = [int(x.rsplit("_", 1)[-1]) for x in archs]
+            archs = [int(x.rsplit("_", 1)[-1]) for x in archs if ("+" not in x and "-" not in x and "ptx" not in x.lower())]
             for arch in archs:
                 if arch < 80:
                     raise ValueError(
@@ -42,6 +42,7 @@ flags = [
     "--expt-extended-lambda",
     "--use_fast_math",
     "--resource-usage",
+    "--ptxas-options=-allow-expensive-optimizations=true"
 ]
 
 
@@ -54,7 +55,7 @@ check_device_capability_minimum_allowed()
 
 setup(
     name="torch_bnb_fp4",
-    version="0.0.7",
+    version="0.0.8",
     packages=find_packages(
         exclude=[
             "csrc",
