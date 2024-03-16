@@ -55,7 +55,7 @@ check_device_capability_minimum_allowed()
 
 setup(
     name="torch_bnb_fp4",
-    version="0.0.8",
+    version="0.0.9",
     packages=find_packages(
         exclude=[
             "csrc",
@@ -64,7 +64,7 @@ setup(
             ".misc/*",
         ]
     ),
-    requires=["bitsandbytes", "prettytable", "accelerate"],
+    requires=["bitsandbytes<0.43", "prettytable", "accelerate"],
     ext_modules=[
         CUDAExtension(
             name="torch_bnb_fp4_ext",
